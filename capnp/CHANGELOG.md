@@ -1,3 +1,6 @@
+## v0.24.0
+- Added support for single segment/no segment table format (used for canonical encoding of messages)
+
 ## v0.23.0
 - Update `capability::FromServer` trait for new `async fn` method signatures.
 

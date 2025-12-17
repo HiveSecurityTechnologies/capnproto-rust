@@ -228,6 +228,92 @@ where
     }
 }
 
+struct PackedTagRead<R>
+where
+    R: BufRead,
+{
+    inner: R,
+}
+
+impl<R> PackedTagRead<R>
+where
+    R: BufRead,
+{
+    fn get_read_buffer(&mut self) -> Result<(*const u8, *const u8)> {
+        let buf = self.inner.fill_buf()?;
+        Ok((buf.as_ptr(), buf.as_ptr().wrapping_add(buf.len())))
+    }
+}
+
+impl<R> Read for PackedTagRead<R>
+where
+    R: BufRead,
+{
+    fn read(&mut self, out_buf: &mut [u8]) -> Result<usize> {
+        let len = out_buf.len();
+        if len < 2048 {
+            return Err(Error::from_kind(ErrorKind::BufferNotLargeEnough));
+        }
+        assert!(len % 8 == 0, "PackedTagRead reads must be word-aligned.");
+
+        let (mut in_ptr, in_end) = self.get_read_buffer()?;
+        let buffer_begin = in_ptr;
+        let size = ptr_sub(in_end, in_ptr);
+        if size == 0 {
+            return Ok(0);
+        }
+
+        macro_rules! assert_more_input {
+            ( $num_bytes:expr ) => {{
+                if ptr_sub(in_end, in_ptr) < $num_bytes {
+                    return Err(Error::from_kind(ErrorKind::PrematureEndOfPackedInput));
+                }
+            }};
+        }
+
+        let mut out = out_buf.as_mut_ptr();
+        unsafe {
+            let tag = *in_ptr;
+            in_ptr = in_ptr.add(1);
+
+            for i in 0..8 {
+                if (tag & (1u8 << i)) != 0 {
+                    assert_more_input!(1);
+                    *out = *in_ptr;
+                    out = out.add(1);
+                    in_ptr = in_ptr.add(1);
+                } else {
+                    *out = 0;
+                    out = out.add(1);
+                }
+            }
+
+            if tag == 0x00 {
+                assert_more_input!(1);
+                let run_length: usize = *in_ptr as usize * 8;
+                in_ptr = in_ptr.add(1);
+
+                ptr::write_bytes(out, 0, run_length);
+                out = out.add(run_length);
+            } else if tag == 0xff {
+                assert_more_input!(1);
+                let run_length: usize = *in_ptr as usize * 8;
+                in_ptr = in_ptr.add(1);
+
+                assert_more_input!(run_length);
+                ptr::copy_nonoverlapping(in_ptr, out, run_length);
+
+                in_ptr = in_ptr.add(run_length);
+                out = out.add(run_length);
+            }
+        }
+
+        self.inner.consume(ptr_sub(in_ptr, buffer_begin));
+
+        Ok(ptr_sub(out, out_buf.as_mut_ptr()))
+    }
+}
+
 /// Reads a packed message from a stream using the provided options.
 #[cfg(feature = "alloc")]
 pub fn read_message<R>(
@@ -272,6 +358,20 @@ where
     serialize::read_message_no_alloc(packed_read, buffer, options)
 }
 
+/// Like [`read_message_no_alloc`], but with a "flat" input.
+/// The flat format has no segment table, which is generally used for canonicalized encodings.
+pub fn read_message_flat_no_alloc<'a, R>(
+    read: R,
+    buffer: &'a mut [u8],
+    options: message::ReaderOptions,
+) -> Result<crate::message::Reader<serialize::FlatSingleSegment<'a>>>
+where
+    R: BufRead,
+{
+    let packed_read = PackedTagRead { inner: read };
+    serialize::read_message_flat_no_alloc(packed_read, buffer, options)
+}
+
 /// Like try_read_message(), but does not allocate.
 ///
 /// Stores the message in `buffer`. Returns a `BufferNotLargeEnough`
@@ -288,6 +388,20 @@ where
 {
     let packed_read = PackedRead { inner: read };
     serialize::try_read_message_no_alloc(packed_read, buffer, options)
+}
+
+/// Like [`try_read_message_no_alloc`], but with a "flat" input.
+/// The flat format has no segment table, which is generally used for canonicalized encodings.
+pub fn try_read_message_flat_no_alloc<'a, R>(
+    read: R,
+    buffer: &'a mut [u8],
+    options: message::ReaderOptions,
+) -> Result<Option<crate::message::Reader<serialize::FlatSingleSegment<'a>>>>
+where
+    R: BufRead,
+{
+    let packed_read = PackedTagRead { inner: read };
+    serialize::try_read_message_flat_no_alloc(packed_read, buffer, options)
 }
 
 struct PackedWrite<W>

@@ -431,6 +431,76 @@ where
     }
 }
 
+pub struct FlatSingleSegment<'a> {
+    segment: &'a [u8],
+}
+
+impl<'a> FlatSingleSegment<'a> {
+    pub fn new(segment: &'a [u8]) -> Self {
+        Self { segment }
+    }
+}
+
+impl<'a> message::ReaderSegments for FlatSingleSegment<'a> {
+    fn get_segment(&self, idx: u32) -> Option<&[u8]> {
+        if idx == 0 {
+            Some(self.segment)
+        } else {
+            None
+        }
+    }
+
+    fn len(&self) -> usize {
+        1
+    }
+}
+
+/// Like [`try_read_message_no_alloc`], but with a "flat" input.
+/// The flat format has no segment table, which is generally used for canonicalized encodings.
+pub fn try_read_message_flat_no_alloc<'a, R>(
+    mut read: R,
+    buffer: &'a mut [u8],
+    options: message::ReaderOptions,
+) -> Result<Option<message::Reader<FlatSingleSegment<'a>>>>
+where
+    R: Read,
+{
+    let mut copy_buf = [0u8; 2048];
+    let mut total_bytes_read = 0;
+    loop {
+        let bytes_read = read.read(&mut copy_buf)?;
+        if bytes_read == 0 {
+            break;
+        }
+        let new_total_bytes_read = total_bytes_read + bytes_read;
+        if new_total_bytes_read > buffer.len() {
+            return Err(Error::from_kind(ErrorKind::BufferNotLargeEnough));
+        }
+        buffer[total_bytes_read..new_total_bytes_read].copy_from_slice(&copy_buf[..bytes_read]);
+
+        total_bytes_read = new_total_bytes_read;
+    }
+
+    let segments = FlatSingleSegment::new(&buffer[..total_bytes_read]);
+    Ok(Some(crate::message::Reader::new(segments, options)))
+}
+
+/// Like [`read_message_no_alloc`], but with a "flat" input.
+/// The flat format has no segment table, which is generally used for canonicalized encodings.
+pub fn read_message_flat_no_alloc<'a, R>(
+    read: R,
+    buffer: &'a mut [u8],
+    options: message::ReaderOptions,
+) -> Result<message::Reader<FlatSingleSegment<'a>>>
+where
+    R: Read,
+{
+    match try_read_message_flat_no_alloc(read, buffer, options)? {
+        Some(m) => Ok(m),
+        None => Err(Error::from_kind(ErrorKind::PrematureEndOfFile)),
+    }
+}
+
 /// Reads a segment table from `read` and returns the total number of words across all
 /// segments, as well as the segment offsets.
 ///

@@ -1,3 +1,6 @@
+## v0.24.0
+- Follow v0.24.0 release of other capnp crates.
+
 ## v0.23.2
 - Remove `async` block in generated code for streaming methods.
 
