@@ -565,6 +565,18 @@ where
     serialize::write_message(packed_write, message)
 }
 
+/// Like [`write_message`], but produces a "flat" encoding.
+/// The flat format has no segment table, which is generally used for canonicalized encodings.
+/// The input message must have exactly one segment.
+pub fn write_message_flat<W, A>(write: W, message: &message::Builder<A>) -> Result<()>
+where
+    W: Write,
+    A: message::Allocator,
+{
+    let packed_write = PackedWrite { inner: write };
+    serialize::write_message_flat(packed_write, message)
+}
+
 #[cfg(feature = "alloc")]
 #[cfg(test)]
 mod tests {

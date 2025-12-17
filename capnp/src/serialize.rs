@@ -643,6 +643,23 @@ where
     write_segments(&mut write, &segments)
 }
 
+/// Like [`write_message`], but produces a "flat" encoding.
+/// The flat format has no segment table, which is generally used for canonicalized encodings.
+/// The input message must have exactly one segment.
+pub fn write_message_flat<W, A>(mut write: W, message: &message::Builder<A>) -> Result<()>
+where
+    W: Write,
+    A: message::Allocator,
+{
+    let segments = message.get_segments_for_output();
+    if segments.len() != 1 {
+        return Err(Error::from_kind(ErrorKind::InvalidNumberOfSegments(
+            segments.len(),
+        )));
+    }
+    write_segments(&mut write, &segments)
+}
+
 /// Like `write_message()`, but takes a `ReaderSegments`, allowing it to be
 /// used on `message::Reader` objects (via `into_segments()`).
 pub fn write_message_segments<W, R>(mut write: W, segments: &R) -> Result<()>
