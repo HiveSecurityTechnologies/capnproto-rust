@@ -28,6 +28,7 @@
 
 #![cfg_attr(feature = "rpc_try", feature(try_trait_v2))]
 #![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(feature = "alloc", feature(allocator_api))]
 
 #[cfg(feature = "alloc")]
 #[macro_use]

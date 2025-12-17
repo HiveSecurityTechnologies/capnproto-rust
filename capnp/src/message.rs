@@ -719,7 +719,7 @@ where
 /// Standard segment allocator. Allocates each segment via `alloc::alloc::alloc_zeroed()`.
 #[derive(Debug)]
 #[cfg(feature = "alloc")]
-pub struct HeapAllocator {
+pub struct HeapAllocator<A: alloc::alloc::Allocator = alloc::alloc::Global> {
     // Minimum number of words in the next allocation.
     next_size: u32,
 
@@ -728,6 +728,9 @@ pub struct HeapAllocator {
 
     // Maximum number of words to allocate.
     max_segment_words: u32,
+
+    // The heap allocator to use.
+    allocator: A,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -744,20 +747,16 @@ pub const SUGGESTED_FIRST_SEGMENT_WORDS: u32 = 1024;
 pub const SUGGESTED_ALLOCATION_STRATEGY: AllocationStrategy = AllocationStrategy::GrowHeuristically;
 
 #[cfg(feature = "alloc")]
-impl Default for HeapAllocator {
+impl<A: alloc::alloc::Allocator + Default> Default for HeapAllocator<A> {
     fn default() -> Self {
-        Self {
-            next_size: SUGGESTED_FIRST_SEGMENT_WORDS,
-            allocation_strategy: SUGGESTED_ALLOCATION_STRATEGY,
-            max_segment_words: 1 << 29,
-        }
+        Self::new_in(A::default())
     }
 }
 
 #[cfg(feature = "alloc")]
 impl HeapAllocator {
     pub fn new() -> Self {
-        Self::default()
+        Self::new_in(alloc::alloc::Global)
     }
 
     /// Sets the size of the initial segment in words, where 1 word = 8 bytes.
@@ -782,15 +781,24 @@ impl HeapAllocator {
 }
 
 #[cfg(feature = "alloc")]
-unsafe impl Allocator for HeapAllocator {
+impl<A: alloc::alloc::Allocator> HeapAllocator<A> {
+    pub fn new_in(allocator: A) -> Self {
+        Self {
+            next_size: SUGGESTED_FIRST_SEGMENT_WORDS,
+            allocation_strategy: SUGGESTED_ALLOCATION_STRATEGY,
+            max_segment_words: 1 << 29,
+            allocator,
+        }
+    }
+}
+
+#[cfg(feature = "alloc")]
+unsafe impl<A: alloc::alloc::Allocator> Allocator for HeapAllocator<A> {
     fn allocate_segment(&mut self, minimum_size: u32) -> (*mut u8, u32) {
         let size = core::cmp::max(minimum_size, self.next_size);
         let layout =
             alloc::alloc::Layout::from_size_align(size as usize * BYTES_PER_WORD, 8).unwrap();
-        let ptr = unsafe { alloc::alloc::alloc_zeroed(layout) };
-        if ptr.is_null() {
-            alloc::alloc::handle_alloc_error(layout);
-        }
+        let ptr = self.allocator.allocate_zeroed(layout).unwrap();
         match self.allocation_strategy {
             AllocationStrategy::GrowHeuristically => {
                 if size < self.max_segment_words - self.next_size {
@@ -801,13 +809,13 @@ unsafe impl Allocator for HeapAllocator {
             }
             AllocationStrategy::FixedSize => {}
         }
-        (ptr, size)
+        (ptr.cast().as_ptr(), size)
     }
 
     unsafe fn deallocate_segment(&mut self, ptr: *mut u8, word_size: u32, _words_used: u32) {
         unsafe {
-            alloc::alloc::dealloc(
-                ptr,
+            self.allocator.deallocate(
+                core::ptr::NonNull::new_unchecked(ptr),
                 alloc::alloc::Layout::from_size_align(word_size as usize * BYTES_PER_WORD, 8)
                     .unwrap(),
             );
